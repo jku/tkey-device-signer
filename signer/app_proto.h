@@ -23,6 +23,11 @@ enum appcmd {
 	CMD_GET_FIRMWARE_HASH = 0x0b,
 	RSP_GET_FIRMWARE_HASH = 0x0c,
 
+	CMD_GET_PUBKEY_CHUNK  = 0x11,
+	RSP_GET_PUBKEY_CHUNK  = 0x12,
+	CMD_GET_SIG_CHUNK     = 0x13,
+	RSP_GET_SIG_CHUNK     = 0x14,
+
 	CMD_FW_PROBE	    = 0xff,
 };
 // clang-format on

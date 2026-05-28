@@ -67,6 +67,12 @@ void appreply(struct frame_header hdr, enum appcmd rspcode, void *buf)
 		nbytes = 128;
 		break;
 
+	case RSP_GET_PUBKEY_CHUNK:
+	case RSP_GET_SIG_CHUNK:
+		len = LEN_128;
+		nbytes = 128;
+		break;
+
 	default:
 		debug_puts("appreply(): Unknown response code: ");
 		debug_puthex(rspcode);

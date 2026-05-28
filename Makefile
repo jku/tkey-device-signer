@@ -26,6 +26,9 @@ CFLAGS = -target riscv32-unknown-none-elf -march=rv32iczmmul -mabi=ilp32 -mcmode
    -Wall -Werror=implicit-function-declaration \
    -I $(INCLUDE) -I $(LIBDIR) #-DTKEY_DEBUG #-DQEMU_DEBUG
 
+MLDSADIR ?= $(P)/../mldsa-native
+CFLAGS += -I signer -I signer/mock-includes -I $(MLDSADIR)/mldsa -I $(MLDSADIR)/mldsa/src -DMLD_CONFIG_FILE=\"mldsa_config.h\"
+
 ifneq ($(TKEY_SIGNER_APP_NO_TOUCH),)
 CFLAGS := $(CFLAGS) -DTKEY_SIGNER_APP_NO_TOUCH
 endif
@@ -66,10 +69,13 @@ CLANG_TIDY = clang-tidy
 check:
 	$(CLANG_TIDY) -header-filter=.* -checks=cert-* signer/*.[ch] -- $(CFLAGS)
 
-# Simple ed25519 signer app
-SIGNEROBJS=signer/main.o signer/app_proto.o
+# ML-DSA-44 signer app
+SIGNEROBJS=signer/main.o signer/app_proto.o signer/mldsa_native.o
 signer/app.elf: $(SIGNEROBJS)
 	$(CC) $(CFLAGS) $(SIGNEROBJS) $(LDFLAGS) -L $(LIBDIR)/monocypher -lmonocypher -I $(LIBDIR) -o $@
+
+signer/mldsa_native.o: $(MLDSADIR)/mldsa/mldsa_native.c
+	$(CC) $(CFLAGS) -c $< -o $@
 $(SIGNEROBJS): $(INCLUDE)/tkey/tk1_mem.h signer/app_proto.h
 
 .PHONY: clean
