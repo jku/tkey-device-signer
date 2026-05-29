@@ -349,7 +349,7 @@ static enum state signing_commands(enum state state, struct context *ctx,
 		debug_puts("Touched, now let's sign\n");
 
 		// Prepare domain separation prefix
-		uint8_t pre[2 + 255];
+		MLD_ALIGN uint8_t pre[2 + 255];
 		size_t pre_len = mldsa_prepare_domain_separation_prefix(pre, NULL, 0, NULL, 0, MLD_PREHASH_NONE);
 		if (pre_len == 0) {
 			debug_puts("prepare prefix failed\n");
