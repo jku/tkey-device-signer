@@ -22,7 +22,8 @@ INCLUDE = $(LIBDIR)/include
 # want it on the TKey HID debug endpoint
 CFLAGS = -target riscv32-unknown-none-elf -march=rv32iczmmul -mabi=ilp32 -mcmodel=medany \
    -static -std=gnu99 -O2 -ffast-math -fno-common -fno-builtin-printf \
-   -fno-builtin-putchar -nostdlib -mno-relax -flto -g \
+   -fno-builtin-putchar -nostdlib -mno-relax -g \
+   -falign-functions=4 -falign-loops=4 \
    -Wall -Werror=implicit-function-declaration \
    -I $(INCLUDE) -I $(LIBDIR) #-DTKEY_DEBUG #-DQEMU_DEBUG
 
