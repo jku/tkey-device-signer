@@ -2,14 +2,29 @@
 
 # Tillitis TKey Signer
 
-The TKey `signer` device application is an ed25519 signing tool. It
-can sign messages up to 4 kByte. It is, for instance, used by the
+
+## Device applications
+
+Two signer applications are provided, both with the same protocol. Both sign messages up to 4 KB.
+
+See [Release notes](RELEASE.md).
+
+
+### Ed25519 signer application
+
+The TKey `tk1 sign` device application is an ed25519 signing tool.
+The ed25519 public keys are 32B and signatures 64B (both fit into a
+a single protocol chunk).
+
+It is, for instance, used by the
 [tkey-ssh-agent](https://github.com/tillitis/tkey-ssh-agent) for SSH
 authentication and by
 [tkey-sign](https://github.com/tillitis/tkey-sign-cli) for doing
 digital signatures of files.
 
-See [Release notes](RELEASE.md).
+### ML-DSA-44 signer application
+
+The `tk1 mlds` device application is a ML-DSA-44 signing tool. The ML-DSA-44 public keys are 1312B and the signatures 2420B (11 and 21 protocol chunks respectively).
 
 ## Client Go package
 
@@ -29,31 +44,38 @@ The protocol has the following requests and responses:
 
 | *command*               | *Function*                       | *FP length* | *code* | *data*            | *response*              |
 |-------------------------|----------------------------------|-------------|--------|-------------------|-------------------------|
-| `CMD_GET_PUBKEY`        | Get the public key               | 1 B         | 0x01   | none              | `RSP_GET_PUBKEY`        |
+| `CMD_GET_PUBKEY`        | Get the public key (legacy)      | 1 B         | 0x01   | none              | `RSP_GET_PUBKEY`        |
 | `CMD_SET_SIZE`          | Set size of message to be signed | 32 B        | 0x03   | size as 32 bit LE | `RSP_SET_SIZE`          |
 | `CMD_LOAD_DATA`         | Load a chunk of message          | 128 B       | 0x05   | 127 B null-padded | `RSP_LOAD_DATA`         |
-| `CMD_GET_SIG`           | Sign and get signature           | 1 B         | 0x07   | none              | `RSP_GET_SIG`           |
+| `CMD_GET_SIG`           | Trigger signing                  | 1 B         | 0x07   | none              | `RSP_GET_SIG`           |
 | `CMD_GET_NAMEVERSION`   | Identify version of app          | 1 B         | 0x09   | none              | `RSP_GET_NAMEVERSION`   |
 | `CMD_GET_FIRMWARE_HASH` | Ask for digest of firmware       | 32 B        | 0x0b   | size as 32 bit LE | `RSP_GET_FIRMWARE_HASH` |
+| `CMD_GET_PUBKEY_CHUNK`  | Get pubkey chunk                 | 4 B         | 0x11   | 1 B chunk index   | `RSP_GET_PUBKEY_CHUNK`  |
+| `CMD_GET_SIG_CHUNK`     | Get sig chunk                    | 4 B         | 0x13   | 1 B chunk index   | `RSP_GET_SIG_CHUNK`     |
 
 | *response*              | *FP length* | *code* | *data*                             |
 |-------------------------|-------------|--------|------------------------------------|
-| `RSP_GET_PUBKEY`        | 128 B       | 0x02   | 32 byte ed25519 public key         |
+| `RSP_GET_PUBKEY`        | 128 B       | 0x02   | public key (only for keys < 128B)  |
 | `RSP_SET_SIZE`          | 4 B         | 0x04   | 1 byte status                      |
 | `RSP_LOAD_DATA`         | 4 B         | 0x06   | 1 byte status                      |
-| `RSP_GET_SIG`           | 128 B       | 0x08   | 64 byte signature                  |
+| `RSP_GET_SIG`           | 128 B       | 0x08   | signature (only for sigs < 128B )  |
 | `RSP_GET_NAMEVERSION`   | 32 B        | 0x0a   | 2 * 4 byte name, version 32 bit LE |
 | `RSP_GET_FIRMWARE_HASH` | 128 B       | 0x0c   | 1 byte status + 64 bytes digest    |
+| `RSP_GET_PUBKEY_CHUNK`  | 128 B       | 0x12   | 1 B chunk index + <=120B key chunk |
+| `RSP_GET_SIG_CHUNK`     | 128 B       | 0x14   | 1 B chunk index + <=120B sig chunk |
 
 | *status replies* | *code* |
 |------------------|--------|
 | OK               | 0      |
 | BAD              | 1      |
 
-It identifies itself with:
-
+The ed25519 signer identifies itself with:
 - `name0`: "tk1  "
 - `name1`: "sign"
+
+The ML-DSA-44 signer identifies itself with:
+- `name0`: "tk1  "
+- `name1`: "mlds"
 
 Please note that `signer` also replies with a `NOK` Framing Protocol
 response status if the endpoint field in the FP header is meant for
@@ -68,13 +90,12 @@ Typical use by a client application:
 2. If firmware is found, load `signer`.
 3. Upon receiving the device app digest back from firmware, switch to
    start talking the `signer` protocol above.
-4. Send `CMD_GET_PUBKEY` to receive the `signer`'s public key. If the
-   public key is already stored, check against it so it's the expected
-   key.
+4. Send `CMD_GET_PUBKEY_CHUNK` iteratively to retrieve the signer's public key (`CMD_GET_PUBKEY` will also work if the key is very small). Caller is expected to know the key size know how many chunks are needed. If the public key is already stored, check against it so it's the expected key.
 5. Send `CMD_SET_SIZE` to set the size of the message to sign.
 6. Send repeated messages with `CMD_LOAD_DATA` to send the
    entire message.
-7. Send `CMD_GET_SIG` to get the signature over the message.
+7. Send `CMD_GET_SIG` to trigger signing. Small keys (ed25519) are returned here as data for backwards compatibility.
+8. Send `CMD_GET_SIG_CHUNK` iteratively to retrieve the signature.
 
 **Please note**: The firmware detection mechanism is not by any means
 secure. If in doubt a user should always remove the TKey and insert it

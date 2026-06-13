@@ -40,28 +40,26 @@ LDFLAGS=-T $(LIBDIR)/app.lds -L $(LIBDIR) -lcommon -lcrt0
 
 
 .PHONY: all
-all: signer/app.bin check-signer-hash
+all: signer/app-ed25519.bin signer/app-mldsa.bin check-signer-hash
 
 # Create compile_commands.json for clangd and LSP
 .PHONY: clangd
 clangd: compile_commands.json
 compile_commands.json:
 	$(MAKE) clean
-	bear -- make signer/app.bin
+	bear -- make signer/app-ed25519.bin signer/app-mldsa.bin
 
 # Turn elf into bin for device
 %.bin: %.elf
 	$(OBJCOPY) --input-target=elf32-littleriscv --output-target=binary $^ $@
 	chmod a-x $@
 
-show-%-hash: %/app.bin
-	@echo "Device app digest:"
-	@$(shasum) $$(dirname $^)/app.bin
+show-hashes: signer/app-ed25519.bin signer/app-mldsa.bin
+	@echo "Device app digests:"
+	@$(shasum) signer/app-ed25519.bin signer/app-mldsa.bin
 
-check-signer-hash: signer/app.bin show-signer-hash
-	@echo "Expected device app digest: "
-	@cat signer/app.bin.sha512
-	$(shasum) -c signer/app.bin.sha512
+check-signer-hash: signer/app-ed25519.bin signer/app-mldsa.bin show-hashes
+	@$(shasum) -c signer/apps.sha512
 
 CLANG_TIDY = clang-tidy
 
@@ -69,18 +67,37 @@ CLANG_TIDY = clang-tidy
 check:
 	$(CLANG_TIDY) -header-filter=.* -checks=cert-* signer/*.[ch] -- $(CFLAGS)
 
-# ML-DSA-44 signer app
-SIGNEROBJS=signer/main.o signer/app_proto.o signer/mldsa_native.o
-signer/app.elf: $(SIGNEROBJS)
-	$(CC) $(CFLAGS) $(SIGNEROBJS) $(LDFLAGS) -L $(LIBDIR)/monocypher -lmonocypher -I $(LIBDIR) -o $@
+SIGNEROBJS_COMMON = signer/app_proto.o
+SIGNEROBJS_MLDSA = signer/main_mldsa.o signer/backend_mldsa.o $(SIGNEROBJS_COMMON) signer/mldsa_native.o
+SIGNEROBJS_ED25519 = signer/main_ed25519.o signer/backend_ed25519.o $(SIGNEROBJS_COMMON)
+
+signer/main_mldsa.o: signer/main.c
+	$(CC) $(CFLAGS) -DALGO_MLDSA -c $< -o $@
+
+signer/main_ed25519.o: signer/main.c
+	$(CC) $(CFLAGS) -DALGO_ED25519 -c $< -o $@
+
+signer/backend_mldsa.o: signer/backend_mldsa.c
+	$(CC) $(CFLAGS) -DALGO_MLDSA -c $< -o $@
+
+signer/backend_ed25519.o: signer/backend_ed25519.c
+	$(CC) $(CFLAGS) -DALGO_ED25519 -c $< -o $@
+
+signer/app-mldsa.elf: $(SIGNEROBJS_MLDSA)
+	$(CC) $(CFLAGS) $(SIGNEROBJS_MLDSA) $(LDFLAGS) -L $(LIBDIR)/monocypher -lmonocypher -I $(LIBDIR) -o $@
+
+signer/app-ed25519.elf: $(SIGNEROBJS_ED25519)
+	$(CC) $(CFLAGS) $(SIGNEROBJS_ED25519) $(LDFLAGS) -L $(LIBDIR)/monocypher -lmonocypher -I $(LIBDIR) -o $@
 
 signer/mldsa_native.o: $(MLDSADIR)/mldsa/mldsa_native.c
 	$(CC) $(CFLAGS) -c $< -o $@
-$(SIGNEROBJS): $(INCLUDE)/tkey/tk1_mem.h signer/app_proto.h
+
+$(SIGNEROBJS_MLDSA) $(SIGNEROBJS_ED25519): $(INCLUDE)/tkey/tk1_mem.h signer/app_proto.h
 
 .PHONY: clean
 clean:
-	rm -f signer/app.bin signer/app.elf $(SIGNEROBJS)
+	rm -f signer/app-mldsa.bin signer/app-mldsa.elf $(SIGNEROBJS_MLDSA)
+	rm -f signer/app-ed25519.bin signer/app-ed25519.elf $(SIGNEROBJS_ED25519)
 
 # Uses ../.clang-format
 FMTFILES=signer/*.[ch]

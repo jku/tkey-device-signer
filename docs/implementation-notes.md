@@ -11,6 +11,7 @@ We have four states:
 - `started`
 - `loading`
 - `signing`
+- `signature_ready`
 - `failed`
 
 When we start the machine we start in state `started` and are ready
@@ -38,11 +39,12 @@ stateDiagram-v2
      S1: started
      S2: loading
      S3: signing
+     S4: signature_ready
      SE: failed
 
      [*] --> S1
 
-     S1 --> S1: GET_NAMEVERSION, GET_PUBKEY, GET_FIRMWARE_HASH
+     S1 --> S1: GET_NAMEVERSION, GET_PUBKEY, GET_PUBKEY_CHUNK, GET_FIRMWARE_HASH
      S1 --> S2: SET_SIZE
      S1 --> SE: Error
 
@@ -51,19 +53,24 @@ stateDiagram-v2
      S2 --> SE: Error
 
      S3 --> SE: Error
-     S3 --> S1: GET_SIG
+     S3 --> S4: GET_SIG
+
+     S4 --> S4: GET_SIG_CHUNK
+     S4 --> S1: Last GET_SIG_CHUNK received or SET_SIZE
+     S4 --> SE: Error
 ```
 
 ### State: started
 
 Commands allowed in state `started`:
 
-| *command*           | *next state* |
-|---------------------|--------------|
-| `GET_NAMEVERSION`   | `started`    |
-| `GET_PUBKEY`        | `started`    |
-| `GET_FIRMWARE_HASH` | `started`    |
-| `SET_SIZE`          | `loading`    |
+| *command*            | *next state* |
+|----------------------|--------------|
+| `GET_NAMEVERSION`    | `started`    |
+| `GET_PUBKEY`         | `started`    |
+| `GET_PUBKEY_CHUNK`   | `started`    |
+| `GET_FIRMWARE_HASH`  | `started`    |
+| `SET_SIZE`           | `loading`    |
 
 In `started` we're ready to start a transaction with a client program.
 It can gather some information or start sending a message to be signed
@@ -95,16 +102,27 @@ Commands allowed in state `signing`:
 
 | *command* | *next state* |
 |-----------|--------------|
-| `GET_SIG` | `started`    |
+| `GET_SIG` | `signature_ready` |
 
 The entire message has been received. We're waiting for the client to
-ask for the signature. No other commands are allowed. If they are
+ask for the signature via `GET_SIG`. No other commands are allowed. If they are
 sent, even a firmware probe, we enter state `failed`.
 
 When the request comes for a signature we first wait for the user to
 assert presence by touching the touch sensor, then sign the message,
-and send the signature back to the client. Then we go back to state
-`started` to expect a new message to sign.
+and reply to the `GET_SIG` command. Then we transition to state `signature_ready`.
+
+### State: signature_ready
+
+Commands allowed in state `signature_ready`:
+
+| *command*         | *next state* |
+|-------------------|--------------|
+| `GET_SIG_CHUNK`   | `signature_ready` or `started` on last chunk |
+| `SET_SIZE`        | `loading` (aborts and restarts state machine) |
+
+We hold the signature in memory and allow the client to read it out in chunks. 
+When the final chunk is read, the signature is securely wiped from memory, and the device returns to `started`. Alternatively, a client can reset the process and jump back to `loading` by using `SET_SIZE`.
 
 ### State: failed
 

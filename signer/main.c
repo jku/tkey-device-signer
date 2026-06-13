@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2022 Tillitis AB <tillitis.se>
 // SPDX-License-Identifier: BSD-2-Clause
 
-#include <mldsa_native.h>
-#include <fips202/fips202.h>
+#include "crypto_backend.h"
 #include <monocypher/monocypher-ed25519.h>
 #include <stdbool.h>
 #include <tkey/assert.h>
@@ -31,7 +30,6 @@ static volatile uint32_t *ver		= (volatile uint32_t *) TK1_MMIO_TK1_VERSION;
 #define MAX_SIGN_SIZE 4096
 
 const uint8_t app_name0[4] = "tk1 ";
-const uint8_t app_name1[4] = "mlds"; // ML-DSA
 const uint32_t app_version = 0x00000004;
 
 enum state {
@@ -44,14 +42,15 @@ enum state {
 
 // Context for the loading of a message
 struct context {
-	uint8_t secret_key[2560]; // ML-DSA-44 secret key
-	uint8_t pubkey[1312];     // ML-DSA-44 public key
-	uint8_t signature[2420];  // ML-DSA-44 signature
+	// Keep private key here below message in memory.
+	uint8_t secret_key[BACKEND_SECRET_KEY_SIZE];
+	uint8_t pubkey[BACKEND_PUBKEY_SIZE];
+	uint8_t signature[BACKEND_SIG_SIZE];
 	uint8_t message[MAX_SIGN_SIZE];
 	uint32_t left; // Bytes left to receive
 	uint32_t message_size;
 	uint16_t msg_idx; // Where we are currently loading a message
-};
+} __attribute__((aligned(8)));
 
 // Incoming packet from client
 struct packet {
@@ -65,10 +64,10 @@ static enum state loading_commands(enum state state, struct context *ctx,
 				   struct packet pkt);
 static enum state signing_commands(enum state state, struct context *ctx,
 				   struct packet pkt);
-static enum state signature_ready_commands(enum state state, struct context *ctx,
-					   struct packet pkt);
 static int read_command(struct frame_header *hdr, uint8_t *cmd);
 static void wipe_context(struct context *ctx);
+static enum state signature_ready_commands(enum state state, struct context *ctx,
+					   struct packet pkt);
 
 static void wipe_context(struct context *ctx)
 {
@@ -84,6 +83,7 @@ static void wipe_context(struct context *ctx)
 // - CMD_GET_NAMEVERSION
 // - CMD_GET_FIRMWARE_HASH
 // - CMD_GET_PUBKEY
+// - CMD_GET_PUBKEY_CHUNK
 // - CMD_SET_SIZE
 //
 // Anything else sent leads to state 'failed'.
@@ -115,6 +115,8 @@ static enum state started_commands(enum state state, struct context *ctx,
 			state = STATE_FAILED;
 			break;
 		}
+
+		const uint8_t app_name1[4] = BACKEND_APP_NAME;
 
 		memcpy_s(rsp, rsp_left, app_name0, sizeof(app_name0));
 		rsp_left -= sizeof(app_name0);
@@ -161,7 +163,29 @@ static enum state started_commands(enum state state, struct context *ctx,
 		break;
 	}
 
-	case CMD_GET_PUBKEY_CHUNK: {
+	case CMD_GET_PUBKEY:
+		debug_puts("CMD_GET_PUBKEY\n");
+		if (pkt.hdr.len != 1) {
+			// Bad length
+			state = STATE_FAILED;
+			break;
+		}
+
+		if (BACKEND_PUBKEY_SIZE > CMDLEN_MAXBYTES) {
+			// Too big for CMD_GET_PUBKEY, client must use chunking
+			rsp[0] = STATUS_BAD;
+			appreply(pkt.hdr, RSP_GET_PUBKEY, rsp);
+			state = STATE_FAILED;
+			break;
+		}
+
+		memcpy_s(rsp, CMDLEN_MAXBYTES, ctx->pubkey, BACKEND_PUBKEY_SIZE);
+		appreply(pkt.hdr, RSP_GET_PUBKEY, rsp);
+
+		// state unchanged
+		break;
+
+	case CMD_GET_PUBKEY_CHUNK:
 		debug_puts("CMD_GET_PUBKEY_CHUNK\n");
 		if (pkt.hdr.len != 4) {
 			// Bad length
@@ -170,16 +194,16 @@ static enum state started_commands(enum state state, struct context *ctx,
 		}
 
 		uint8_t chunk_idx = pkt.cmd[1];
-		if (chunk_idx > 10) {
+		uint32_t offset = chunk_idx * 120;
+		if (offset >= BACKEND_PUBKEY_SIZE) {
 			debug_puts("Bad chunk index\n");
 			state = STATE_FAILED;
 			break;
 		}
 
-		uint32_t offset = chunk_idx * 120;
 		uint32_t size = 120;
-		if (chunk_idx == 10) {
-			size = 1312 - 1200; // 112 bytes
+		if (offset + size > BACKEND_PUBKEY_SIZE) {
+			size = BACKEND_PUBKEY_SIZE - offset;
 		}
 
 		rsp[0] = STATUS_OK;
@@ -192,7 +216,6 @@ static enum state started_commands(enum state state, struct context *ctx,
 		appreply(pkt.hdr, RSP_GET_PUBKEY_CHUNK, rsp);
 		// state unchanged
 		break;
-	}
 
 	case CMD_SET_SIZE: {
 		uint32_t local_message_size = 0;
@@ -348,24 +371,7 @@ static enum state signing_commands(enum state state, struct context *ctx,
 #endif
 		debug_puts("Touched, now let's sign\n");
 
-		// Prepare domain separation prefix
-		MLD_ALIGN uint8_t pre[2 + 255];
-		size_t pre_len = mldsa_prepare_domain_separation_prefix(pre, NULL, 0, NULL, 0, MLD_PREHASH_NONE);
-		if (pre_len == 0) {
-			debug_puts("prepare prefix failed\n");
-			state = STATE_FAILED;
-			break;
-		}
-
-		// Run deterministic ML-DSA-44 signing
-		uint8_t rnd[32] = {0};
-		size_t siglen = 0;
-		int res = mldsa_signature_internal(ctx->signature, &siglen, ctx->message,
-						   ctx->message_size, pre, pre_len, rnd,
-						   ctx->secret_key, 0);
-
-		if (res != 0) {
-			debug_puts("mldsa_signature_internal failed\n");
+		if (backend_sign(ctx->signature, ctx->secret_key, ctx->message, ctx->message_size) != 0) {
 			rsp[0] = STATUS_BAD;
 			appreply(pkt.hdr, RSP_GET_SIG, rsp);
 
@@ -375,6 +381,9 @@ static enum state signing_commands(enum state state, struct context *ctx,
 
 		debug_puts("Signature computed!\n");
 		rsp[0] = STATUS_OK;
+		if (BACKEND_SIG_SIZE <= (CMDLEN_MAXBYTES - 1)) {
+			memcpy_s(rsp + 1, CMDLEN_MAXBYTES - 1, ctx->signature, BACKEND_SIG_SIZE);
+		}
 		appreply(pkt.hdr, RSP_GET_SIG, rsp);
 
 		state = STATE_SIGNATURE_READY;
@@ -416,16 +425,17 @@ static enum state signature_ready_commands(enum state state, struct context *ctx
 		}
 
 		uint8_t chunk_idx = pkt.cmd[1];
-		if (chunk_idx > 20) {
+		uint32_t offset = chunk_idx * 120;
+
+		if (offset >= BACKEND_SIG_SIZE) {
 			debug_puts("Bad chunk index\n");
 			state = STATE_FAILED;
 			break;
 		}
 
-		uint32_t offset = chunk_idx * 120;
 		uint32_t size = 120;
-		if (chunk_idx == 20) {
-			size = 2420 - 2400; // 20 bytes
+		if (offset + size > BACKEND_SIG_SIZE) {
+			size = BACKEND_SIG_SIZE - offset;
 		}
 
 		rsp[0] = STATUS_OK;
@@ -437,9 +447,9 @@ static enum state signature_ready_commands(enum state state, struct context *ctx
 
 		appreply(pkt.hdr, RSP_GET_SIG_CHUNK, rsp);
 
-		if (chunk_idx == 20) {
+		if (offset + size == BACKEND_SIG_SIZE) {
 			// Wipe signature and context
-			secure_wipe(ctx->signature, 2420);
+			secure_wipe(ctx->signature, BACKEND_SIG_SIZE);
 			wipe_context(ctx);
 			state = STATE_STARTED;
 		}
@@ -448,7 +458,7 @@ static enum state signature_ready_commands(enum state state, struct context *ctx
 
 	case CMD_SET_SIZE: {
 		// Lazy wipe before restarting
-		secure_wipe(ctx->signature, 2420);
+		secure_wipe(ctx->signature, BACKEND_SIG_SIZE);
 		wipe_context(ctx);
 
 		// Now let started_commands handle the CMD_SET_SIZE command
@@ -462,7 +472,7 @@ static enum state signature_ready_commands(enum state state, struct context *ctx
 		debug_puthex(pkt.cmd[0]);
 		debug_lf();
 
-		secure_wipe(ctx->signature, 2420);
+		secure_wipe(ctx->signature, BACKEND_SIG_SIZE);
 		wipe_context(ctx);
 		state = STATE_FAILED;
 		break;
@@ -576,15 +586,7 @@ int main(void)
 #endif
 
 	// Generate a public/private keypair from CDI
-	MLD_ALIGN uint8_t cdi_buf[32];
-	wordcpy(cdi_buf, (const void *)cdi, 8); // copy 8 words (32 bytes)
-	MLD_ALIGN uint8_t seeds[64];
-	mldsa_shake256(seeds, 64, cdi_buf, 32);
-	secure_wipe(cdi_buf, 32);
-	int keypair_res = mldsa_keypair_internal(ctx.pubkey, ctx.secret_key, seeds);
-	secure_wipe(seeds, 64);
-	if (keypair_res != 0) {
-		debug_puts("Key generation failed!\n");
+	if (backend_keygen(ctx.pubkey, ctx.secret_key, (const uint32_t *)cdi) != 0) {
 		state = STATE_FAILED;
 	}
 
@@ -622,7 +624,7 @@ int main(void)
 			debug_puts("parser state 0x");
 			debug_puthex(state);
 			debug_lf();
-			secure_wipe(ctx.signature, 2420);
+			secure_wipe(ctx.signature, BACKEND_SIG_SIZE);
 			wipe_context(&ctx);
 			assert(1 == 2);
 			break; // Not reached

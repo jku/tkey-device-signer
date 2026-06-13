@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Extend protocol to support larger keys and signatures with
+  "chunking".
+- Add another device application for ML-DSA-44 signing.
 - Adapt to use new USB Mode Protocol and new I/O functions.
   Note that debug flags in the Makefile have changed for use of the
   `debug_*()` functions. Use `-DQEMU_DEBUG` for QEMU output or
