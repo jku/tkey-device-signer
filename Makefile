@@ -28,7 +28,7 @@ CFLAGS = -target riscv32-unknown-none-elf -march=rv32iczmmul -mabi=ilp32 -mcmode
    -I $(INCLUDE) -I $(LIBDIR) #-DTKEY_DEBUG #-DQEMU_DEBUG
 
 MLDSADIR ?= $(P)/../mldsa-native
-CFLAGS += -I signer -I signer/mock-includes -I $(MLDSADIR)/mldsa -I $(MLDSADIR)/mldsa/src -DMLD_CONFIG_FILE=\"mldsa_config.h\"
+MLDSA_CFLAGS =  -I signer -I signer/mock-includes -I $(MLDSADIR)/mldsa -I $(MLDSADIR)/mldsa/src -DMLD_CONFIG_FILE=\"mldsa_config.h\"
 
 ifneq ($(TKEY_SIGNER_APP_NO_TOUCH),)
 CFLAGS := $(CFLAGS) -DTKEY_SIGNER_APP_NO_TOUCH
@@ -73,13 +73,13 @@ SIGNEROBJS_MLDSA = signer/main_mldsa.o signer/backend_mldsa.o $(SIGNEROBJS_COMMO
 SIGNEROBJS_ED25519 = signer/main_ed25519.o signer/backend_ed25519.o $(SIGNEROBJS_COMMON)
 
 signer/main_mldsa.o: signer/main.c
-	$(CC) $(CFLAGS) -DALGO_MLDSA -c $< -o $@
+	$(CC) $(CFLAGS) $(MLDSA_CFLAGS) -DALGO_MLDSA -c $< -o $@
 
 signer/main_ed25519.o: signer/main.c
 	$(CC) $(CFLAGS) -DALGO_ED25519 -c $< -o $@
 
 signer/backend_mldsa.o: signer/backend_mldsa.c
-	$(CC) $(CFLAGS) -DALGO_MLDSA -c $< -o $@
+	$(CC) $(CFLAGS) $(MLDSA_CFLAGS) -DALGO_MLDSA -c $< -o $@
 
 signer/backend_ed25519.o: signer/backend_ed25519.c
 	$(CC) $(CFLAGS) -DALGO_ED25519 -c $< -o $@
@@ -91,7 +91,7 @@ signer/app-ed25519.elf: $(SIGNEROBJS_ED25519)
 	$(CC) $(CFLAGS) $(SIGNEROBJS_ED25519) $(LDFLAGS) -L $(LIBDIR)/monocypher -lmonocypher -I $(LIBDIR) -o $@
 
 signer/mldsa_native.o: $(MLDSADIR)/mldsa/mldsa_native.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(MLDSA_CFLAGS) -c $< -o $@
 
 $(SIGNEROBJS_MLDSA) $(SIGNEROBJS_ED25519): $(INCLUDE)/tkey/tk1_mem.h signer/app_proto.h
 
