@@ -234,8 +234,7 @@ static enum state started_commands(enum state state, struct context *ctx,
 		local_message_size = pkt.cmd[1] + (pkt.cmd[2] << 8) +
 				     (pkt.cmd[3] << 16) + (pkt.cmd[4] << 24);
 
-		if (local_message_size == 0 ||
-		    local_message_size > MAX_SIGN_SIZE) {
+		if (local_message_size > MAX_SIGN_SIZE) {
 			debug_puts("Message size not within range!\n");
 			rsp[0] = STATUS_BAD;
 			appreply(pkt.hdr, RSP_SET_SIZE, rsp);
@@ -253,7 +252,11 @@ static enum state started_commands(enum state state, struct context *ctx,
 		rsp[0] = STATUS_OK;
 		appreply(pkt.hdr, RSP_SET_SIZE, rsp);
 
-		state = STATE_LOADING;
+		if (local_message_size == 0) {
+			state = STATE_SIGNING;
+		} else {
+			state = STATE_LOADING;
+		}
 		break;
 	}
 
